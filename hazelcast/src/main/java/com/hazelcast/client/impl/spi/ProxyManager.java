@@ -97,6 +97,7 @@ public final class ProxyManager {
 
     private final ConcurrentMap<String, ClientProxyFactory> proxyFactories = new ConcurrentHashMap<>();
     private final ConcurrentMap<ObjectNamespace, ClientProxyFuture> proxies = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService executor;
 
     private final HazelcastClientInstanceImpl client;
 
@@ -104,6 +105,7 @@ public final class ProxyManager {
 
     public ProxyManager(HazelcastClientInstanceImpl client) {
         this.client = client;
+        executor = createExecutorService();
     }
 
     @SuppressWarnings("checkstyle:methodlength")
@@ -146,8 +148,8 @@ public final class ProxyManager {
         }
 
         readProxyDescriptors();
-        ScheduledExecutorService executor = createExecutorService();
-
+        executor.schedule(new SyncDistributedObjectsTask(),
+                DISTRIBUTED_OBJECT_SYNC_PERIOD_MILLIS, TimeUnit.MILLISECONDS);
     }
 
     private ScheduledExecutorService createExecutorService() {
@@ -337,10 +339,6 @@ public final class ProxyManager {
 
     public Collection<? extends DistributedObject> getDistributedObjects() {
         try {
-            ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
-            ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
-            ClientMessage response = future.get();
-            processDistributedObjectInfos(response);
             return getLocalDistributedObjects();
         } catch (Exception e) {
             throw rethrow(e);
@@ -360,17 +358,9 @@ public final class ProxyManager {
         public void run() {
             ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
             ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
-            future.thenRunAsync(new ExecutionCallback<ClientMessage>() {
-                @Override
-                public void onResponse(ClientMessage response) {
-                    processDistributedObjectInfos(response);
-                }
-
-                @Override
-                public void onFailure(Throwable t) {
-
-                }
-            });
+            future.whenCompleteAsync((clientMessage, throwable) -> {
+                processDistributedObjectInfos(clientMessage);
+            }, executor);
         }
     }
 
