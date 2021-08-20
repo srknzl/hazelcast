@@ -28,13 +28,10 @@ import com.hazelcast.client.config.ClientFailoverConfig;
 import com.hazelcast.client.cp.internal.CPSubsystemImpl;
 import com.hazelcast.client.cp.internal.session.ClientProxySessionManager;
 import com.hazelcast.client.impl.ClientExtension;
-import com.hazelcast.client.impl.client.DistributedObjectInfo;
 import com.hazelcast.client.impl.connection.AddressProvider;
 import com.hazelcast.client.impl.connection.ClientConnectionManager;
 import com.hazelcast.client.impl.connection.tcp.TcpClientConnectionManager;
 import com.hazelcast.client.impl.protocol.ClientExceptionFactory;
-import com.hazelcast.client.impl.protocol.ClientMessage;
-import com.hazelcast.client.impl.protocol.codec.ClientGetDistributedObjectsCodec;
 import com.hazelcast.client.impl.proxy.ClientClusterProxy;
 import com.hazelcast.client.impl.proxy.PartitionServiceProxy;
 import com.hazelcast.client.impl.spi.ClientClusterService;
@@ -46,7 +43,6 @@ import com.hazelcast.client.impl.spi.ClientTransactionManagerService;
 import com.hazelcast.client.impl.spi.ProxyManager;
 import com.hazelcast.client.impl.spi.impl.ClientClusterServiceImpl;
 import com.hazelcast.client.impl.spi.impl.ClientExecutionServiceImpl;
-import com.hazelcast.client.impl.spi.impl.ClientInvocation;
 import com.hazelcast.client.impl.spi.impl.ClientInvocationServiceImpl;
 import com.hazelcast.client.impl.spi.impl.ClientPartitionServiceImpl;
 import com.hazelcast.client.impl.spi.impl.ClientTransactionManagerServiceImpl;
@@ -139,17 +135,14 @@ import javax.annotation.Nonnull;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EventListener;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Queue;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -607,24 +600,6 @@ public class HazelcastClientInstanceImpl implements HazelcastInstance, Serializa
     @Override
     public Collection<DistributedObject> getDistributedObjects() {
         try {
-            ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
-            final Future<ClientMessage> future = new ClientInvocation(this, request, getName()).invoke();
-            ClientMessage response = future.get();
-
-            Collection<? extends DistributedObject> distributedObjects = proxyManager.getDistributedObjects();
-            Set<DistributedObjectInfo> localDistributedObjects = new HashSet<>();
-            for (DistributedObject localInfo : distributedObjects) {
-                localDistributedObjects.add(new DistributedObjectInfo(localInfo.getServiceName(), localInfo.getName()));
-            }
-
-            for (DistributedObjectInfo distributedObjectInfo : ClientGetDistributedObjectsCodec.decodeResponse(response)) {
-                localDistributedObjects.remove(distributedObjectInfo);
-                getDistributedObject(distributedObjectInfo.getServiceName(), distributedObjectInfo.getName(), false);
-            }
-
-            for (DistributedObjectInfo distributedObjectInfo : localDistributedObjects) {
-                proxyManager.destroyProxyLocally(distributedObjectInfo.getServiceName(), distributedObjectInfo.getName());
-            }
             return (Collection<DistributedObject>) proxyManager.getDistributedObjects();
         } catch (Exception e) {
             throw rethrow(e);
