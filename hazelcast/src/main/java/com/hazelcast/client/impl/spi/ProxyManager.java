@@ -26,7 +26,11 @@ import com.hazelcast.client.impl.ClientExtension;
 import com.hazelcast.client.impl.client.DistributedObjectInfo;
 import com.hazelcast.client.impl.clientside.HazelcastClientInstanceImpl;
 import com.hazelcast.client.impl.protocol.ClientMessage;
-import com.hazelcast.client.impl.protocol.codec.*;
+import com.hazelcast.client.impl.protocol.codec.ClientAddDistributedObjectListenerCodec;
+import com.hazelcast.client.impl.protocol.codec.ClientCreateProxiesCodec;
+import com.hazelcast.client.impl.protocol.codec.ClientCreateProxyCodec;
+import com.hazelcast.client.impl.protocol.codec.ClientGetDistributedObjectsCodec;
+import com.hazelcast.client.impl.protocol.codec.ClientRemoveDistributedObjectListenerCodec;
 import com.hazelcast.client.impl.proxy.ClientCardinalityEstimatorProxy;
 import com.hazelcast.client.impl.proxy.ClientDurableExecutorServiceProxy;
 import com.hazelcast.client.impl.proxy.ClientExecutorServiceProxy;
@@ -50,7 +54,11 @@ import com.hazelcast.client.impl.spi.impl.listener.LazyDistributedObjectEvent;
 import com.hazelcast.collection.impl.list.ListService;
 import com.hazelcast.collection.impl.queue.QueueService;
 import com.hazelcast.collection.impl.set.SetService;
-import com.hazelcast.core.*;
+import com.hazelcast.core.DistributedObject;
+import com.hazelcast.core.DistributedObjectEvent;
+import com.hazelcast.core.DistributedObjectListener;
+import com.hazelcast.core.HazelcastException;
+import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.durableexecutor.impl.DistributedDurableExecutorService;
 import com.hazelcast.executor.impl.DistributedExecutorService;
 import com.hazelcast.flakeidgen.impl.FlakeIdGeneratorService;
@@ -63,7 +71,6 @@ import com.hazelcast.internal.services.ObjectNamespace;
 import com.hazelcast.internal.util.executor.LoggingScheduledExecutor;
 import com.hazelcast.internal.util.executor.PoolExecutorThreadFactory;
 import com.hazelcast.logging.ILogger;
-import com.hazelcast.logging.Logger;
 import com.hazelcast.map.impl.MapService;
 import com.hazelcast.multimap.impl.MultiMapService;
 import com.hazelcast.replicatedmap.impl.ReplicatedMapService;
@@ -75,8 +82,23 @@ import com.hazelcast.transaction.impl.xa.XAService;
 
 import javax.annotation.Nonnull;
 import java.lang.reflect.Constructor;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.AbstractMap;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static com.hazelcast.internal.util.ExceptionUtil.rethrow;
 import static com.hazelcast.internal.util.Preconditions.checkNotNull;
@@ -91,12 +113,34 @@ import static com.hazelcast.internal.util.ServiceLoader.classIterator;
 public final class ProxyManager {
 
     private static final long DISTRIBUTED_OBJECT_SYNC_PERIOD_MILLIS = 10000;
+    private static final int EXECUTOR_POOL_SIZE = 1;
     private static final String PROVIDER_ID = ClientProxyDescriptorProvider.class.getCanonicalName();
     private static final Class[] LEGACY_CONSTRUCTOR_ARGUMENT_TYPES = new Class[]{String.class, String.class};
     private static final Class[] CONSTRUCTOR_ARGUMENT_TYPES = new Class[]{String.class, String.class, ClientContext.class};
 
     private final ConcurrentMap<String, ClientProxyFactory> proxyFactories = new ConcurrentHashMap<>();
     private final ConcurrentMap<ObjectNamespace, ClientProxyFuture> proxies = new ConcurrentHashMap<>();
+
+    /**
+     * Used to wait for reading distributed objects response, before any distributed object can be created.
+     * Necessary to ensure that some distributed objects won't be destroyed locally. They can also be
+     * recreated in the cluster, this readWriteLock does not solve that issue.
+     *
+     * If we don't synchronize proxy creating with getDistributedObjects() a local proxy can be created:
+     * * The client gets dist objects info and while processing them gets a long pause.
+     * * The client creates a proxy.
+     * * The client continues to process distributed objects, since the newly created objects is not in the list,
+     * it will be destroyed locally.
+     *
+     * Remove proxy recreation issue:
+     * * Cluster connection lost.
+     * * In the cluster a proxy is destroyed.
+     * * The client reconnects and sends its proxies to cluster, thus recreating a proxy.
+     */
+    private final ReentrantReadWriteLock distributedObjectsRwLock = new ReentrantReadWriteLock();
+    private final Lock distributedObjectsReadLock = distributedObjectsRwLock.readLock();
+    private final Lock distributedObjectsWriteLock = distributedObjectsRwLock.writeLock();
+    // used to lock/unlock write lock from the same thread
     private final ScheduledExecutorService executor;
 
     private final HazelcastClientInstanceImpl client;
@@ -156,7 +200,7 @@ public final class ProxyManager {
         ClassLoader classLoader = client.getClientConfig().getClassLoader();
         ILogger logger = client.getLoggingService().getLogger(ProxyManager.class);
         String name = client.getName();
-        return new LoggingScheduledExecutor(logger, 1,
+        return new LoggingScheduledExecutor(logger, EXECUTOR_POOL_SIZE,
                 new PoolExecutorThreadFactory(name + ".internal-", classLoader), (r, executor) -> {
             String message = "Internal executor rejected task: " + r + ", because client is shutting down...";
             logger.finest(message);
@@ -238,34 +282,39 @@ public final class ProxyManager {
         checkNotNull(service, "Service name is required!");
         checkNotNull(id, "Object name is required!");
 
-        final ObjectNamespace ns = new DistributedObjectNamespace(service, id);
-        ClientProxyFuture proxyFuture = proxies.get(ns);
-        if (proxyFuture != null) {
-            return proxyFuture.get();
-        }
-        ClientProxyFactory factory = proxyFactories.get(service);
-        if (factory == null) {
-            throw new ClientServiceNotFoundException("No factory registered for service: " + service);
-        }
-        proxyFuture = new ClientProxyFuture();
-        ClientProxyFuture current = proxies.putIfAbsent(ns, proxyFuture);
-        if (current != null) {
-            return current.get();
-        }
-
+        distributedObjectsReadLock.lock();
         try {
-            ClientProxy clientProxy = createClientProxy(id, factory);
-            if (remote) {
-                initialize(clientProxy);
-            } else {
-                clientProxy.onInitialize();
+            final ObjectNamespace ns = new DistributedObjectNamespace(service, id);
+            ClientProxyFuture proxyFuture = proxies.get(ns);
+            if (proxyFuture != null) {
+                return proxyFuture.get();
             }
-            proxyFuture.set(clientProxy);
-            return clientProxy;
-        } catch (Throwable e) {
-            proxies.remove(ns);
-            proxyFuture.set(e);
-            throw rethrow(e);
+            ClientProxyFactory factory = proxyFactories.get(service);
+            if (factory == null) {
+                throw new ClientServiceNotFoundException("No factory registered for service: " + service);
+            }
+            proxyFuture = new ClientProxyFuture();
+            ClientProxyFuture current = proxies.putIfAbsent(ns, proxyFuture);
+            if (current != null) {
+                return current.get();
+            }
+
+            try {
+                ClientProxy clientProxy = createClientProxy(id, factory);
+                if (remote) {
+                    initialize(clientProxy);
+                } else {
+                    clientProxy.onInitialize();
+                }
+                proxyFuture.set(clientProxy);
+                return clientProxy;
+            } catch (Throwable e) {
+                proxies.remove(ns);
+                proxyFuture.set(e);
+                throw rethrow(e);
+            }
+        } finally {
+            distributedObjectsReadLock.unlock();
         }
     }
 
@@ -338,11 +387,19 @@ public final class ProxyManager {
     }
 
     public Collection<? extends DistributedObject> getDistributedObjects() {
+        ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
+        distributedObjectsWriteLock.lock();
         try {
-            return getLocalDistributedObjects();
+            ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
+            ClientMessage response = future.get();
+            processDistributedObjectInfos(response);
         } catch (Exception e) {
             throw rethrow(e);
+        } finally {
+            distributedObjectsWriteLock.unlock();
         }
+
+        return getLocalDistributedObjects();
     }
 
     public Collection<? extends DistributedObject> getLocalDistributedObjects() {
@@ -357,9 +414,14 @@ public final class ProxyManager {
         @Override
         public void run() {
             ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
+            distributedObjectsWriteLock.lock();
             ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
             future.whenCompleteAsync((clientMessage, throwable) -> {
-                processDistributedObjectInfos(clientMessage);
+                try {
+                    processDistributedObjectInfos(clientMessage);
+                } finally {
+                    distributedObjectsWriteLock.unlock();
+                }
             }, executor);
         }
     }
