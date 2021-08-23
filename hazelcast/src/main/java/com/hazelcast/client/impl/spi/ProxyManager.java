@@ -113,6 +113,7 @@ import static com.hazelcast.internal.util.ServiceLoader.classIterator;
 public final class ProxyManager {
 
     private static final long DISTRIBUTED_OBJECT_SYNC_PERIOD_MILLIS = 10000;
+    // Pool size of 1 is enough since only SyncDistributedObjectsTask will use this executor
     private static final int EXECUTOR_POOL_SIZE = 1;
     private static final String PROVIDER_ID = ClientProxyDescriptorProvider.class.getCanonicalName();
     private static final Class[] LEGACY_CONSTRUCTOR_ARGUMENT_TYPES = new Class[]{String.class, String.class};
