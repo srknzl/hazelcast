@@ -202,7 +202,7 @@ public final class ProxyManager {
         ILogger logger = client.getLoggingService().getLogger(ProxyManager.class);
         String name = client.getName();
         return new LoggingScheduledExecutor(logger, EXECUTOR_POOL_SIZE,
-                new PoolExecutorThreadFactory(name + ".internal-", classLoader), (r, executor) -> {
+                new PoolExecutorThreadFactory(name + ".proxy.internal-", classLoader), (r, executor) -> {
             String message = "Internal executor rejected task: " + r + ", because client is shutting down...";
             logger.finest(message);
             throw new RejectedExecutionException(message);
@@ -388,6 +388,11 @@ public final class ProxyManager {
     }
 
     public Collection<? extends DistributedObject> getDistributedObjects() {
+        getAndProcessDistributedObjects();
+        return getLocalDistributedObjects();
+    }
+
+    private void getAndProcessDistributedObjects() {
         ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
         distributedObjectsWriteLock.lock();
         try {
@@ -399,8 +404,6 @@ public final class ProxyManager {
         } finally {
             distributedObjectsWriteLock.unlock();
         }
-
-        return getLocalDistributedObjects();
     }
 
     public Collection<? extends DistributedObject> getLocalDistributedObjects() {
@@ -414,16 +417,7 @@ public final class ProxyManager {
     class SyncDistributedObjectsTask implements Runnable {
         @Override
         public void run() {
-            ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
-            distributedObjectsWriteLock.lock();
-            ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
-            future.whenCompleteAsync((clientMessage, throwable) -> {
-                try {
-                    processDistributedObjectInfos(clientMessage);
-                } finally {
-                    distributedObjectsWriteLock.unlock();
-                }
-            }, executor);
+            getAndProcessDistributedObjects();
         }
     }
 
