@@ -126,13 +126,13 @@ public final class ProxyManager {
      * Used to wait for reading distributed objects response, before any distributed object can be created.
      * Necessary to ensure that some distributed objects won't be destroyed locally. They can also be
      * recreated in the cluster, this readWriteLock does not solve that issue.
-     *
+     * <p>
      * If we don't synchronize proxy creating with getDistributedObjects() a local proxy can be created:
      * * The client gets dist objects info and while processing them gets a long pause.
      * * The client creates a proxy.
      * * The client continues to process distributed objects, since the newly created objects is not in the list,
      * it will be destroyed locally.
-     *
+     * <p>
      * Remove proxy recreation issue:
      * * Cluster connection lost.
      * * In the cluster a proxy is destroyed.
@@ -193,7 +193,7 @@ public final class ProxyManager {
         }
 
         readProxyDescriptors();
-        executor.schedule(new SyncDistributedObjectsTask(),
+        executor.schedule(new CleanStaleLocalProxiesTask(),
                 DISTRIBUTED_OBJECT_SYNC_PERIOD_MILLIS, TimeUnit.MILLISECONDS);
     }
 
@@ -283,39 +283,47 @@ public final class ProxyManager {
         checkNotNull(service, "Service name is required!");
         checkNotNull(id, "Object name is required!");
 
+        final ObjectNamespace ns = new DistributedObjectNamespace(service, id);
+        ClientProxyFuture proxyFuture;
+
         distributedObjectsReadLock.lock();
         try {
-            final ObjectNamespace ns = new DistributedObjectNamespace(service, id);
-            ClientProxyFuture proxyFuture = proxies.get(ns);
+            proxyFuture = proxies.get(ns);
             if (proxyFuture != null) {
                 return proxyFuture.get();
             }
-            ClientProxyFactory factory = proxyFactories.get(service);
-            if (factory == null) {
-                throw new ClientServiceNotFoundException("No factory registered for service: " + service);
-            }
+
+        } finally {
+            distributedObjectsReadLock.unlock();
+        }
+
+        ClientProxyFactory factory = proxyFactories.get(service);
+        if (factory == null) {
+            throw new ClientServiceNotFoundException("No factory registered for service: " + service);
+        }
+
+        // We can do a write operation in the following block, thus we use the write lock.
+        distributedObjectsWriteLock.lock();
+        try {
             proxyFuture = new ClientProxyFuture();
             ClientProxyFuture current = proxies.putIfAbsent(ns, proxyFuture);
             if (current != null) {
                 return current.get();
             }
-
-            try {
-                ClientProxy clientProxy = createClientProxy(id, factory);
-                if (remote) {
-                    initialize(clientProxy);
-                } else {
-                    clientProxy.onInitialize();
-                }
-                proxyFuture.set(clientProxy);
-                return clientProxy;
-            } catch (Throwable e) {
-                proxies.remove(ns);
-                proxyFuture.set(e);
-                throw rethrow(e);
+            ClientProxy clientProxy = createClientProxy(id, factory);
+            if (remote) {
+                initialize(clientProxy);
+            } else {
+                clientProxy.onInitialize();
             }
+            proxyFuture.set(clientProxy);
+            return clientProxy;
+        } catch (Throwable e) {
+            proxies.remove(ns);
+            proxyFuture.set(e);
+            throw rethrow(e);
         } finally {
-            distributedObjectsReadLock.unlock();
+            distributedObjectsWriteLock.unlock();
         }
     }
 
@@ -388,17 +396,16 @@ public final class ProxyManager {
     }
 
     public Collection<? extends DistributedObject> getDistributedObjects() {
-        getAndProcessDistributedObjects();
         return getLocalDistributedObjects();
     }
 
-    private void getAndProcessDistributedObjects() {
+    private void getDistributedObjectsAndCleanStaleLocalProxies() {
         ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
         distributedObjectsWriteLock.lock();
         try {
             ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
             ClientMessage response = future.get();
-            processDistributedObjectInfos(response);
+            cleanStaleLocalProxies(response);
         } catch (Exception e) {
             throw rethrow(e);
         } finally {
@@ -414,14 +421,14 @@ public final class ProxyManager {
         return objects;
     }
 
-    class SyncDistributedObjectsTask implements Runnable {
+    class CleanStaleLocalProxiesTask implements Runnable {
         @Override
         public void run() {
-            getAndProcessDistributedObjects();
+            getDistributedObjectsAndCleanStaleLocalProxies();
         }
     }
 
-    private synchronized void processDistributedObjectInfos(ClientMessage response) {
+    private synchronized void cleanStaleLocalProxies(ClientMessage response) {
         Collection<DistributedObjectInfo> newDistributedObjectInfo = ClientGetDistributedObjectsCodec.decodeResponse(response);
 
         Collection<? extends DistributedObject> distributedObjects = getLocalDistributedObjects();
@@ -432,7 +439,6 @@ public final class ProxyManager {
 
         for (DistributedObjectInfo distributedObjectInfo : newDistributedObjectInfo) {
             localDistributedObjects.remove(distributedObjectInfo);
-            getOrCreateProxyInternal(distributedObjectInfo.getServiceName(), distributedObjectInfo.getName(), false);
         }
 
         for (DistributedObjectInfo distributedObjectInfo : localDistributedObjects) {
