@@ -600,6 +600,9 @@ public class HazelcastClientInstanceImpl implements HazelcastInstance, Serializa
     @Override
     public Collection<DistributedObject> getDistributedObjects() {
         try {
+            // Synchronize local proxies by creating new local proxies. This is needed since a user may rely on old
+            // behaviour of creating local proxies. For example, ICache objects require a local proxy to exist.
+            proxyManager.getDistributedObjectsAndSyncLocalProxies(true);
             return (Collection<DistributedObject>) proxyManager.getDistributedObjects();
         } catch (Exception e) {
             throw rethrow(e);

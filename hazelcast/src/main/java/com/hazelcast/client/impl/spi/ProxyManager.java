@@ -392,13 +392,18 @@ public final class ProxyManager {
         return getLocalDistributedObjects();
     }
 
-    private void getDistributedObjectsAndCleanStaleLocalProxies() {
+    /**
+     * Get distributed objects from cluster and synchronize local proxies with them
+     *
+     * @param createProxies Whether synchronization should include creating local proxies
+     */
+    public void getDistributedObjectsAndSyncLocalProxies(Boolean createProxies) {
         ClientMessage request = ClientGetDistributedObjectsCodec.encodeRequest();
         distributedObjectsWriteLock.lock();
         try {
             ClientInvocationFuture future = new ClientInvocation(client, request, client.getName()).invoke();
             ClientMessage response = future.get();
-            cleanStaleLocalProxies(response);
+            syncLocalProxies(response, createProxies);
         } catch (Exception e) {
             throw rethrow(e);
         } finally {
@@ -417,11 +422,11 @@ public final class ProxyManager {
     class CleanStaleLocalProxiesTask implements Runnable {
         @Override
         public void run() {
-            getDistributedObjectsAndCleanStaleLocalProxies();
+            getDistributedObjectsAndSyncLocalProxies(false);
         }
     }
 
-    private synchronized void cleanStaleLocalProxies(ClientMessage response) {
+    public synchronized void syncLocalProxies(ClientMessage response, Boolean createProxies) {
         Collection<DistributedObjectInfo> newDistributedObjectInfo = ClientGetDistributedObjectsCodec.decodeResponse(response);
 
         Collection<? extends DistributedObject> distributedObjects = getLocalDistributedObjects();
@@ -432,6 +437,9 @@ public final class ProxyManager {
 
         for (DistributedObjectInfo distributedObjectInfo : newDistributedObjectInfo) {
             localDistributedObjects.remove(distributedObjectInfo);
+            if (createProxies) {
+                getOrCreateLocalProxy(distributedObjectInfo.getServiceName(), distributedObjectInfo.getName());
+            }
         }
 
         for (DistributedObjectInfo distributedObjectInfo : localDistributedObjects) {
