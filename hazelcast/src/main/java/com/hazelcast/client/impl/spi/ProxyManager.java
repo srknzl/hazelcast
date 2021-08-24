@@ -131,7 +131,8 @@ public final class ProxyManager {
      * * The client gets dist objects info and while processing them gets a long pause.
      * * The client creates a proxy.
      * * The client continues to process distributed objects, since the newly created objects is not in the list,
-     * it will be destroyed locally.
+     * it will be destroyed locally. For cache proxy this is unwanted and using locally distributed cache will throw an
+     * error.
      * <p>
      * Remove proxy recreation issue:
      * * Cluster connection lost.
@@ -284,32 +285,24 @@ public final class ProxyManager {
         checkNotNull(id, "Object name is required!");
 
         final ObjectNamespace ns = new DistributedObjectNamespace(service, id);
-        ClientProxyFuture proxyFuture;
-
-        distributedObjectsReadLock.lock();
-        try {
-            proxyFuture = proxies.get(ns);
-            if (proxyFuture != null) {
-                return proxyFuture.get();
-            }
-
-        } finally {
-            distributedObjectsReadLock.unlock();
+        ClientProxyFuture proxyFuture = proxies.get(ns);
+        if (proxyFuture != null) {
+            return proxyFuture.get();
         }
-
         ClientProxyFactory factory = proxyFactories.get(service);
         if (factory == null) {
             throw new ClientServiceNotFoundException("No factory registered for service: " + service);
         }
 
-        // We can do a write operation in the following block, thus we use the write lock.
-        distributedObjectsWriteLock.lock();
+        proxyFuture = new ClientProxyFuture();
+        ClientProxyFuture current = proxies.putIfAbsent(ns, proxyFuture);
+        if (current != null) {
+            return current.get();
+        }
+        // we will create a new proxy in the following block, we use read lock so that
+        // multiple creates can run in parallel if polling distributed objects is not in progress.
+        distributedObjectsReadLock.lock();
         try {
-            proxyFuture = new ClientProxyFuture();
-            ClientProxyFuture current = proxies.putIfAbsent(ns, proxyFuture);
-            if (current != null) {
-                return current.get();
-            }
             ClientProxy clientProxy = createClientProxy(id, factory);
             if (remote) {
                 initialize(clientProxy);
@@ -323,7 +316,7 @@ public final class ProxyManager {
             proxyFuture.set(e);
             throw rethrow(e);
         } finally {
-            distributedObjectsWriteLock.unlock();
+            distributedObjectsReadLock.unlock();
         }
     }
 
