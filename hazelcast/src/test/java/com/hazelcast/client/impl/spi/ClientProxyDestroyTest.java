@@ -90,20 +90,6 @@ public class ClientProxyDestroyTest extends ClientTestSupport {
 
     @Test
     @Category(SlowTest.class)
-    public void testRemoteProxyCreationDelegatesToClientEventually() {
-        final HazelcastClientInstanceImpl clientInstanceImpl = getHazelcastClientInstanceImpl(client);
-        assertEquals(0, clientInstanceImpl.getProxyManager().getLocalDistributedObjects().size());
-        client2.getMap("map");
-        assertTrueEventually(new AssertTask() {
-            @Override
-            public void run() {
-                assertEquals(1, clientInstanceImpl.getProxyManager().getLocalDistributedObjects().size());
-            }
-        });
-    }
-
-    @Test
-    @Category(SlowTest.class)
     public void testRemoteProxyDeletionDelegatesToClientEventually() {
         final HazelcastClientInstanceImpl clientInstanceImpl = getHazelcastClientInstanceImpl(client);
         client.getMap("map");
