@@ -40,6 +40,7 @@ import com.hazelcast.client.impl.protocol.AuthenticationStatus;
 import com.hazelcast.client.impl.protocol.ClientMessage;
 import com.hazelcast.client.impl.protocol.codec.ClientAuthenticationCodec;
 import com.hazelcast.client.impl.protocol.codec.ClientAuthenticationCustomCodec;
+import com.hazelcast.client.impl.proxy.ClientClusterProxy;
 import com.hazelcast.client.impl.spi.impl.ClientExecutionServiceImpl;
 import com.hazelcast.client.impl.spi.impl.ClientInvocation;
 import com.hazelcast.client.impl.spi.impl.ClientInvocationFuture;
@@ -426,6 +427,7 @@ public class TcpClientConnectionManager implements ClientConnectionManager, Memb
 
         // try the current cluster
         if (doConnectToCandidateCluster(currentContext, false)) {
+            ((ClientClusterProxy) client.getCluster()).setClusterName(currentContext.getClusterName());
             connectionProcessListenerRunner.onClusterConnectionSucceeded(currentContext.getClusterName());
             return;
         }

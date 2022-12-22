@@ -826,6 +826,11 @@ public class ClusterServiceImpl implements ClusterService, ConnectionListener, M
         changeClusterState(newState, options, false);
     }
 
+    @Override
+    public String getClusterName() {
+        return this.node.getConfig().getClusterName();
+    }
+
     private void changeClusterState(@Nonnull ClusterState newState,
                                     @Nonnull TransactionOptions options,
                                     boolean isTransient) {

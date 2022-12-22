@@ -205,6 +205,8 @@ public interface Cluster {
      */
     void changeClusterState(@Nonnull ClusterState newState, @Nonnull TransactionOptions transactionOptions);
 
+    String getClusterName();
+
     /**
      * The cluster version indicates the operating version of the cluster. It is separate from each node's codebase version,
      * as it may be acceptable for a node to operate at a different compatibility version than its codebase version. This method

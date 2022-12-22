@@ -40,6 +40,8 @@ import java.util.UUID;
 public class ClientClusterProxy implements Cluster {
 
     private final ClientClusterServiceImpl clusterService;
+    private Version clusterVersion;
+    private String clusterName;
 
     public ClientClusterProxy(ClientClusterServiceImpl clusterService) {
         this.clusterService = clusterService;
@@ -88,7 +90,20 @@ public class ClientClusterProxy implements Cluster {
     @Override
     @Nonnull
     public Version getClusterVersion() {
-        throw new UnsupportedOperationException();
+        return this.clusterVersion;
+    }
+
+    public void setClusterVersion(Version version) {
+        this.clusterVersion = version;
+    }
+
+    @Override
+    public String getClusterName() {
+        return this.clusterName;
+    }
+
+    public void setClusterName(String clusterName) {
+        this.clusterName = clusterName;
     }
 
     @Override
