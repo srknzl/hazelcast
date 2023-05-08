@@ -1,18 +1,17 @@
-package com.hazelcast.map.impl.operation;
+package com.hazelcast.map.impl.wan;
 
-import com.hazelcast.internal.nio.IOUtil;
-import com.hazelcast.map.impl.MapDataSerializerHook;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.IdentifiedDataSerializable;
+import com.hazelcast.spi.impl.operationservice.Operation;
 import com.hazelcast.spi.impl.operationservice.PartitionAwareOperation;
 import com.hazelcast.wan.WanPublisher;
 import com.hazelcast.wan.impl.InternalWanEvent;
+import com.hazelcast.wan.impl.WanDataSerializerHook;
 
 import java.io.IOException;
 
-
-public class PublishWanEventOperation extends MapOperation implements PartitionAwareOperation, IdentifiedDataSerializable {
+public class PublishWanEventOperation extends Operation implements PartitionAwareOperation, IdentifiedDataSerializable {
     private String wanReplicationName;
     private String wanPublisherId;
     private InternalWanEvent wanEvent;
@@ -28,19 +27,19 @@ public class PublishWanEventOperation extends MapOperation implements PartitionA
     }
 
     @Override
-    protected void runInternal() {
+    public void run() {
         WanPublisher publisher = this.getNodeEngine().getWanReplicationService().getPublisherOrFail(this.wanReplicationName, this.wanPublisherId);
         publisher.publishReplicationEvent(wanEvent);
     }
 
     @Override
     public int getFactoryId() {
-        return MapDataSerializerHook.F_ID;
+        return WanDataSerializerHook.F_ID;
     }
 
     @Override
     public int getClassId() {
-        return MapDataSerializerHook.MAP_WAN_PUBLISH_EVENT;
+        return WanDataSerializerHook.WAN_MIGRATION_PUBLISH_EVENT;
     }
 
     @Override
