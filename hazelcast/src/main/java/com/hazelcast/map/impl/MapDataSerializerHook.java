@@ -98,6 +98,7 @@ import com.hazelcast.map.impl.operation.PartitionWideEntryWithPredicateBackupOpe
 import com.hazelcast.map.impl.operation.PartitionWideEntryWithPredicateOperation;
 import com.hazelcast.map.impl.operation.PartitionWideEntryWithPredicateOperationFactory;
 import com.hazelcast.map.impl.operation.PostJoinMapOperation;
+import com.hazelcast.map.impl.operation.PublishWanEventOperation;
 import com.hazelcast.map.impl.operation.PutAllBackupOperation;
 import com.hazelcast.map.impl.operation.PutAllOperation;
 import com.hazelcast.map.impl.operation.PutAllPartitionAwareOperationFactory;
@@ -324,8 +325,9 @@ public final class MapDataSerializerHook implements DataSerializerHook {
     public static final int INDEX_ITERATION_POINTER = 156;
     public static final int MAP_FETCH_INDEX_OPERATION_RESULT = 157;
     public static final int MAP_CHUNK = 158;
+    public static final int MAP_WAN_PUBLISH_EVENT = 159;
 
-    private static final int LEN = MAP_CHUNK + 1;
+    private static final int LEN = MAP_WAN_PUBLISH_EVENT + 1;
 
     @Override
     public int getFactoryId() {
@@ -491,6 +493,7 @@ public final class MapDataSerializerHook implements DataSerializerHook {
         constructors[INDEX_ITERATION_POINTER] = arg -> new IndexIterationPointer();
         constructors[MAP_FETCH_INDEX_OPERATION_RESULT] = arg -> new MapFetchIndexOperationResult();
         constructors[MAP_CHUNK] = arg -> new MapChunk();
+        constructors[MAP_WAN_PUBLISH_EVENT] = arg -> new PublishWanEventOperation();
 
         return new ArrayDataSerializableFactory(constructors);
     }
