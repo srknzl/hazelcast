@@ -6,9 +6,12 @@ import com.hazelcast.wan.WanEvent;
 import com.hazelcast.wan.WanPublisher;
 
 public class PublishWanEventOperation extends Operation implements PartitionAwareOperation {
-    private final String wanReplicationName;
-    private final String wanPublisherId;
-    private final WanEvent wanEvent;
+    private String wanReplicationName;
+    private String wanPublisherId;
+    private WanEvent wanEvent;
+
+    public PublishWanEventOperation() {
+    }
 
     public PublishWanEventOperation(String wanReplicationName, String wanPublisherId, int partitionId, WanEvent wanEvent) {
         this.wanReplicationName = wanReplicationName;
@@ -21,10 +24,5 @@ public class PublishWanEventOperation extends Operation implements PartitionAwar
     public void run() throws Exception {
         WanPublisher publisher = this.getNodeEngine().getWanReplicationService().getPublisherOrFail(this.wanReplicationName, this.wanPublisherId);
         publisher.publishReplicationEvent(wanEvent);
-    }
-
-    @Override
-    public Object getResponse() {
-        return super.getResponse();
     }
 }
